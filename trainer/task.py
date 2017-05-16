@@ -91,6 +91,58 @@ class EvaluationRunHook(tf.train.SessionRunHook):
             coord.request_stop()
             coord.join(threads)
 
+def build_and_run_exports(latest, job_dir, name, convs, kernels):
+    """Given the latest checkpoint file export the saved model.
+
+  Args:
+    latest (string): Latest checkpoint file
+    job_dir (string): Location of checkpoints and model files
+    name (string): Name of the checkpoint to be exported. Used in building the
+      export path.
+    hidden_units (list): Number of hidden units
+    learning_rate (float): Learning rate for the SGD
+  """
+
+    prediction_graph = tf.Graph()
+    exporter = tf.saved_model.builder.SavedModelBuilder(
+        os.path.join(job_dir, 'export', name))
+    with prediction_graph.as_default():
+        imgs = tf.placeholder(tf.float32, shape=[None, 96, 96, 1])
+        prediction_dict = model.model_fn(
+            model.PREDICT,
+            imgs,
+            None,
+            convs=convs,
+            kernels=kernels,
+            learning_rate=None,
+        )
+        saver = tf.train.Saver()
+
+        inputs_info = {
+            'images': tf.saved_model.utils.build_tensor_info(imgs)
+        }
+        output_info = {
+            prediction_dict.keys()[0]: tf.saved_model.utils.build_tensor_info(prediction_dict.values()[0])
+        }
+        signature_def = tf.saved_model.signature_def_utils.build_signature_def(
+            inputs=inputs_info,
+            outputs=output_info,
+            method_name=tf.saved_model.signature_constants.PREDICT_METHOD_NAME
+        )
+
+    with tf.Session(graph=prediction_graph) as session:
+        session.run([tf.local_variables_initializer(), tf.tables_initializer()])
+        saver.restore(session, latest)
+        exporter.add_meta_graph_and_variables(
+            session,
+            tags=[tf.saved_model.tag_constants.SERVING],
+            signature_def_map={
+                tf.saved_model.signature_constants.DEFAULT_SERVING_SIGNATURE_DEF_KEY: signature_def
+            },
+        )
+
+    exporter.save()
+
 
 def run(target,
         is_chief,
@@ -103,7 +155,8 @@ def run(target,
         eval_frequency,
         ckpts_save_freq_sec,
         p_keep,
-        convs):
+        convs,
+        kernels):
     """
     Runs the training of the model
     
@@ -118,13 +171,17 @@ def run(target,
     :param eval_frequency: evaluation is run every n checkpoints save
     :param ckpts_save_freq_sec: checkpoints are saved every n seconds
     :param p_keep: probability to keep a unit when applying drop out
-    :param convs (string): architecture of DNN, e.g. '32 64 128'
+    :param convs: (string)architecture of DNN, e.g. '32 64 128'
+    :param kernels: (list) kernels size for each conv layer. Must be of same length as convs
     """
     convs = [int(lyr) for lyr in convs.split()]
+    kernels = [int(k) for k in kernels.split()]
+    if len(convs) != len(kernels):
+        raise ValueError('A kernel must be provided for each convolutional layer.')
     eval_graph = tf.Graph()
     with eval_graph.as_default():
         imgs, labels = model.input_fn(eval_files, batch_size=batch_size)
-        model.model_fn(model.EVAL, imgs, labels, None, convs, 1.0)
+        model.model_fn(model.EVAL, imgs, labels, None, convs, kernels, 1.0)
 
     hook = EvaluationRunHook(job_dir, eval_graph, eval_frequency)
 
@@ -139,6 +196,7 @@ def run(target,
                 labels,
                 learning_rate=learning_rate,
                 convs=convs,
+                kernels=kernels,
                 p_keep=p_keep
             )
 
@@ -240,6 +298,9 @@ if __name__ == "__main__":
     parser.add_argument('--convs',
                         type=str,
                         default='32 64 128')
+    parser.add_argument('--kernels',
+                        type=str,
+                        default='3 3 3')
 
     parse_args, unknown = parser.parse_known_args()
 

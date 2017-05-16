@@ -30,19 +30,20 @@ def conv_relu(inputs, kernel_size, strides, depth):
     return tf.nn.relu(conv)
 
 
-def full_pass(inputs, convs, p_keep):
+def full_pass(inputs, convs, kernels, p_keep, is_training=True):
     """
     Full pass through the CNN
     
     :param inputs: Tensor with shape [None, width, height, depth], input images to the model
     :param convs: (list) architecture of the CNN, e.g. [32, 64, 128]
     :param p_keep: probability to keep a unit when applying drop out
-    :return: Tensor with shape [?, 30], outputs location of the areas of interest
+    :param is_training: flag indicating whether this pass is done in a training context
+    :return: Tensor with shape [None, 30], outputs location of the areas of interest
     """
     ip = inputs
-    for i, c in enumerate(convs):
+    for i, (c, k) in enumerate(zip(convs, kernels)):
         with tf.variable_scope('conv_{}'.format(i)):
-            ip = conv_relu(ip, 3, 1, c)
+            ip = conv_relu(ip, k, 1, c)
             ip = tf.nn.max_pool(ip, [1, 2, 2, 1], [1, 2, 2, 1], padding='SAME')
             ip = tf.contrib.layers.dropout(ip, p_keep, is_training=is_training)
     shape = ip.get_shape().as_list()
@@ -59,6 +60,7 @@ def model_fn(mode,
              labels,
              learning_rate=0.1,
              convs=None,
+             kernels=None,
              p_keep=1.0):
     """
     Adds necessary nodes to graph and returns ops to be evaluated
@@ -68,10 +70,15 @@ def model_fn(mode,
     :param labels: Tensor with shape [None, n_labels] to be predicted, None if mode is Predict
     :param learning_rate: rate in SGD, None if mode is Predict
     :param convs: (list) architecture of the CNN, e.g. [32, 64, 128]
+    :param kernels: (list) kernels size for each conv layer. Must be of same length as convs
     :param p_keep: probability to keep a unit when applying drop out, None if mode is Predict
     :return: The ops to be evaluated
     """
-    pred = full_pass(inputs, convs, p_keep, mode == TRAIN)
+    if convs is None:
+        convs = [32, 64, 128]
+    if kernels is None:
+        kernels = [3, 3, 3]
+    pred = full_pass(inputs, convs, kernels, p_keep, mode == TRAIN)
     if mode in (TRAIN, EVAL):
         global_step = tf.contrib.framework.get_or_create_global_step()
         loss = tf.reduce_mean(tf.square(pred - labels))
