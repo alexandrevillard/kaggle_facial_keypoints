@@ -9,7 +9,6 @@ TRAIN, EVAL, PREDICT = 'TRAIN', 'EVAL', 'PREDICT'
 def conv_relu(inputs, kernel_size, strides, depth):
     """
     Creates a convolutional layer, with relu activation function
-    
     :param inputs: Input Tensor with shape [None, width, height, depth]
     :param kernel_size: Size of the kernel (assumed square)
     :param strides: strides length, only for
@@ -33,9 +32,9 @@ def conv_relu(inputs, kernel_size, strides, depth):
 def full_pass(inputs, convs, kernels, p_keep, is_training=True):
     """
     Full pass through the CNN
-    
     :param inputs: Tensor with shape [None, width, height, depth], input images to the model
     :param convs: (list) architecture of the CNN, e.g. [32, 64, 128]
+    :param kernels: (list) kernels width/height for each conv layer
     :param p_keep: probability to keep a unit when applying drop out
     :param is_training: flag indicating whether this pass is done in a training context
     :return: Tensor with shape [None, 30], outputs location of the areas of interest
@@ -64,7 +63,6 @@ def model_fn(mode,
              p_keep=1.0):
     """
     Adds necessary nodes to graph and returns ops to be evaluated
-    
     :param mode: TRAIN, EVAL, PREDICT depending on usage
     :param inputs: Tensor with shape [None, width, height, depth], input images to the model
     :param labels: Tensor with shape [None, n_labels] to be predicted, None if mode is Predict
@@ -100,21 +98,13 @@ def model_fn(mode,
         }
 
 
-def input_fn(filenames,
-             batch_size,
-             num_epochs=None,
-             shuffle=False):
+def decode_single_example(reader, filename_queue):
     """
-    Creates data pipeline.
-    
-    :param filenames: (list) filenames of the inputs
-    :param batch_size: size of the batches
-    :param num_epochs: number of epochs
-    :param shuffle: flag to indicate whether to shuffle (True) or not
-    :return: a list of inputs ops
+    Returns a single example from a tfrecord file
+    :param reader: a TFRecordReader
+    :param filename_queue: 
+    :return: (image, label) tuple
     """
-    reader = tf.TFRecordReader()
-    filename_queue = tf.train.string_input_producer(filenames, num_epochs=num_epochs)
     _, serialized_example = reader.read(filename_queue)
     features = tf.parse_single_example(
         serialized_example,
@@ -128,18 +118,36 @@ def input_fn(filenames,
 
     label = tf.cast(features['labels'], tf.float32)
     image = tf.decode_raw(features['image_raw'], tf.uint8)
-    image = tf.to_float(image) / 255.
     image = tf.reshape(image, [IMG_SIZE, IMG_SIZE, 1])
+    return image, label
+
+
+def input_fn(filenames,
+             batch_size,
+             num_epochs=None,
+             shuffle=True):
+    """
+    Creates data pipeline.
+    :param filenames: (list) filenames of the inputs
+    :param batch_size: size of the batches
+    :param num_epochs: number of epochs
+    :param shuffle: flag to indicate whether to shuffle (True) or not
+    :return: a list of inputs ops
+    """
+    filename_queue = tf.train.string_input_producer(filenames, num_epochs=num_epochs)
+    reader = tf.TFRecordReader()
+    image, label = decode_single_example(reader, filename_queue)
+    image = tf.to_float(image) / 255.
     if shuffle:
-        images, labels = tf.train.batch([image, label],
-                                        batch_size,
-                                        allow_smaller_final_batch=True,
-                                        num_threads=multiprocessing.cpu_count())
-    else:
         images, labels = tf.train.shuffle_batch([image, label],
                                                 batch_size,
                                                 capacity=batch_size * 10,
                                                 min_after_dequeue=batch_size * 2 + 1,
                                                 allow_smaller_final_batch=True,
                                                 num_threads=multiprocessing.cpu_count())
+    else:
+        images, labels = tf.train.batch([image, label],
+                                        batch_size,
+                                        allow_smaller_final_batch=True,
+                                        num_threads=multiprocessing.cpu_count())
     return images, labels
