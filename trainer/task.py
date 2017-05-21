@@ -109,7 +109,7 @@ def run(target,
     hook = EvaluationRunHook(job_dir,
                              eval_graph,
                              eval_frequency,
-                             eval_steps=3200 / batch_size,
+                             eval_steps=550 / batch_size,
                              metric=metric,
                              early_stopper=early_stopper)
 
